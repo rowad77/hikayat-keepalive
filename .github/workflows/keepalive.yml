@@ -1,0 +1,45 @@
+name: keepalive
+
+# Pings the Hikayat Render API so its free-tier instance never spins down
+# (Render sleeps a free web service after ~15 min of no traffic). Lives in a
+# PUBLIC repo so GitHub Actions minutes are unlimited/free.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every 10 minutes
+  workflow_dispatch: {} # allow manual runs
+
+permissions:
+  contents: write
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ping Render health endpoint
+        run: |
+          ok=0
+          for i in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 \
+              https://hikayat-api.onrender.com/api/healthz || echo 000)
+            echo "ping $i -> $code"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            sleep 15
+          done
+          if [ "$ok" = "1" ]; then echo "service is warm"; else echo "no 200 this round (next run retries)"; fi
+
+      - name: Daily heartbeat commit (keeps the schedule from auto-disabling after 60 days)
+        run: |
+          today=$(date -u +%F)
+          echo "last warm-up: $today" > last-ping.txt
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add last-ping.txt
+            git commit -m "heartbeat: $today"
+            git push
+          else
+            echo "already committed today; nothing to push"
+          fi
